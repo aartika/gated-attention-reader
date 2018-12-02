@@ -318,12 +318,7 @@ class GAReader:
                 for i, fname in enumerate(fnames):
                     doc_len = np.sum(m_dw[i])
                     qry_len = np.sum(m_qw[i])
-                    print(doc_len)
-                    print(qry_len)
-                    print(attentions[i].shape)
-                    attns = attentions[i, 0:doc_len, 0:qry_len]
-                    print(attns.shape)
-                    result = {'pred_ans' : pred_ans[i], 'attentions' : attentions[i, 0:doc_len, 0:qry_len], 'ans' : a[i]}
+                    result = {'pred_ans' : pred_ans[i], 'attentions' : attentions[i, :, 0:doc_len, 0:qry_len], 'ans' : a[i]}
                     if pred_ans[i] == a[i]:
                         correct = 'correct'
                     else:

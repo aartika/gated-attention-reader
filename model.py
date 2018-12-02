@@ -14,6 +14,8 @@ from tqdm import trange
 from utils.misc import prepare_input
 from utils.model_helper import *
 from utils.data_preprocessor import MAX_WORD_LEN
+import pickle
+import numpy as np
 
 
 class GAReader:
@@ -31,8 +33,42 @@ class GAReader:
         self.gating_fn = gating_fn
         self.n_vocab = vocab_size
         self.use_chars = self.char_dim != 0
+#        self.doc = tf.placeholder(
+#            tf.int32, [None, None], name="doc")
+#        self.qry = tf.placeholder(
+#            tf.int32, [None, None], name="query")
+#        self.cand = tf.placeholder(
+#            tf.int32, [None, None, None], name="cand_ans")
+#        self.target = tf.placeholder(
+#            tf.int32, [None, ], name="answer")
+#        self.cloze = tf.placeholder(
+#            tf.int32, [None, ], name="cloze")
+#        # word mask
+#        self.doc_mask = tf.placeholder(
+#            tf.int32, [None, None], name="doc_mask")
+#        self.qry_mask = tf.placeholder(
+#            tf.int32, [None, None], name="query_mask")
+#        self.cand_mask = tf.placeholder(
+#            tf.int32, [None, None], name="cand_mask")
+#        # char input
+#        self.doc_char = tf.placeholder(
+#            tf.int32, [None, None], name="doc_char")
+#        self.qry_char = tf.placeholder(
+#            tf.int32, [None, None], name="qry_char")
+#        self.token = tf.placeholder(
+#            tf.int32, [None, MAX_WORD_LEN], name="token")
+#        # char mask
+#        self.char_mask = tf.placeholder(
+#            tf.int32, [None, MAX_WORD_LEN], name="char_mask")
+#        # extra features
+#        self.feat = tf.placeholder(
+#            tf.int32, [None, None], name="features")
+#
+#        # model parameters
+#        self.lr = tf.placeholder(tf.float32, name="learning_rate")
+#        self.keep_prob = tf.placeholder(tf.float32, name="keep_prob")
 
-    def build_graph(self, grad_clip, embed_init):
+    def build_graph(self, grad_clip=0.0, embed_init=None):
         """
         define model variables
         """
@@ -45,6 +81,8 @@ class GAReader:
             tf.int32, [None, None, None], name="cand_ans")
         self.target = tf.placeholder(
             tf.int32, [None, ], name="answer")
+        self.pred_ans = tf.placeholder(
+            tf.int32, [None, ], name="pred_ans")
         self.cloze = tf.placeholder(
             tf.int32, [None, ], name="cloze")
         # word mask
@@ -71,7 +109,7 @@ class GAReader:
         # model parameters
         self.lr = tf.placeholder(tf.float32, name="learning_rate")
         self.keep_prob = tf.placeholder(tf.float32, name="keep_prob")
-
+        
         # word embedding
         if embed_init is None:
             word_embedding = tf.get_variable(
@@ -117,10 +155,13 @@ class GAReader:
             doc_embed = tf.concat([doc_embed, doc_char_embed], axis=2)
             qry_embed = tf.concat([qry_embed, qry_char_embed], axis=2)
 
-        self.attentions = []
+        
+        doc_shp = tf.shape(self.doc)
+        qry_shp = tf.shape(self.qry)
+
         if self.save_attn:
             inter = pairwise_interaction(doc_embed, qry_embed)
-            self.attentions.append(inter)
+            self.attentions = tf.expand_dims(inter, 1) 
 
         for i in range(self.n_layers - 1):
             fw_doc = GRU(self.gru_size)
@@ -147,7 +188,7 @@ class GAReader:
                 gating_fn=self.gating_fn)
             doc_embed = tf.nn.dropout(doc_inter_embed, self.keep_prob)
             if self.save_attn:
-                self.attentions.append(inter)
+                self.attentions = tf.concat([self.attentions, tf.expand_dims(inter, 1)], 1)
 
         if self.use_feat:
             doc_embed = tf.concat([doc_embed, feat_embed], axis=2)
@@ -170,7 +211,7 @@ class GAReader:
 
         if self.save_attn:
             inter = pairwise_interaction(doc_embed_final, qry_embed_final)
-            self.attentions.append(inter)
+            self.attentions = tf.concat([self.attentions, tf.expand_dims(inter, 1)], 1)
 
         self.pred = attention_sum(
             doc_embed_final, qry_embed_final, self.cand,
@@ -212,9 +253,11 @@ class GAReader:
         tf.add_to_collection('accuracy', self.accuracy)
         tf.add_to_collection('updates', self.updates)
         tf.add_to_collection('learning_rate', self.lr)
+        tf.add_to_collection('pred_ans', self.pred_ans)
+        tf.add_to_collection('attentions', self.attentions)
 
     def train(self, sess, dw, dt, qw, qt, a, m_dw, m_qw, tt,
-              tm, c, m_c, cl, fnames, dropout, learning_rate):
+              tm, c, m_c, cl, fnames, dropout, learning_rate, summary_step=False):
         """
         train model
         Args:
@@ -231,11 +274,18 @@ class GAReader:
             feat = prepare_input(dw, qw)
             feed_dict += {self.feat: feat}
 
-        loss, acc, _, = \
-            sess.run([self.loss, self.accuracy, self.updates], feed_dict)
-        return loss, acc
+        tf.summary.scalar('learning_rate', self.lr)
+        merged = tf.summary.merge_all()
+        if summary_step:
+            loss, acc, _, summary = \
+                sess.run([self.loss, self.accuracy, self.updates, merged], feed_dict)
+            return loss, acc, summary
+        else:
+            loss, acc, _, = \
+                sess.run([self.loss, self.accuracy, self.updates], feed_dict)
+            return loss, acc
 
-    def validate(self, sess, data):
+    def validate(self, sess, data, write_results=False):
         """
         test the model
         """
@@ -257,27 +307,44 @@ class GAReader:
             if self.use_feat:
                 feat = prepare_input(dw, qw)
                 feed_dict += {self.feat: feat}
-            _loss, _acc = sess.run([self.loss, self.accuracy], feed_dict)
+            _loss, _acc, pred_ans, attentions = sess.run([self.loss, self.accuracy, self.pred_ans, self.attentions], feed_dict)
             n_exmple += dw.shape[0]
             loss += _loss
             acc += _acc
             tr.set_description("loss: {:.3f}, acc: {:.3f}".
                                format(_loss, _acc / dw.shape[0]))
             tr.update()
+            if write_results:
+                for i, fname in enumerate(fnames):
+                    doc_len = np.sum(m_dw[i])
+                    qry_len = np.sum(m_qw[i])
+                    print(doc_len)
+                    print(qry_len)
+                    print(attentions[i].shape)
+                    attns = attentions[i, 0:doc_len, 0:qry_len]
+                    print(attns.shape)
+                    result = {'pred_ans' : pred_ans[i], 'attentions' : attentions[i, 0:doc_len, 0:qry_len], 'ans' : a[i]}
+                    if pred_ans[i] == a[i]:
+                        correct = 'correct'
+                    else:
+                        correct = 'incorrect'
+                    question = os.path.basename(fname).split('.')[0]
+                    pickle.dump(result, open('results/test/{}/{}.pkl'.format(correct, question), 'wb'))
         tr.close()
         loss /= n_exmple
         acc /= n_exmple
+        merged = tf.summary.merge_all()
         spend = (time.time() - start) / 60
         statement = "loss: {:.3f}, acc: {:.3f}, time: {:.1f}(m)"\
             .format(loss, acc, spend)
         logging.info(statement)
         return loss, acc
 
-    def restore(self, sess, checkpoint_dir):
+    def restore(self, sess, checkpoint_dir, ckpt_epoch):
         """
         restore model
         """
-        checkpoint_path = os.path.join(checkpoint_dir, 'model.ckpt')
+        checkpoint_path = os.path.join(checkpoint_dir, 'epoch_{:02}_model.ckpt'.format(ckpt_epoch))
         loader = tf.train.import_meta_graph(checkpoint_path + '.meta')
         loader.restore(sess, checkpoint_path)
         logging.info("model restored from {}".format(checkpoint_path))
@@ -300,8 +367,10 @@ class GAReader:
         self.accuracy = tf.get_collection('accuracy')[0]
         self.updates = tf.get_collection('updates')[0]
         self.lr = tf.get_collection('learning_rate')[0]
+        self.pred_ans = tf.get_collection('pred_ans')[0]
+        self.attentions = tf.get_collection('attentions')[0]
 
-    def save(self, sess, saver, checkpoint_dir):
-        checkpoint_path = os.path.join(checkpoint_dir, 'model.ckpt')
+    def save(self, sess, saver, checkpoint_dir, epoch):
+        checkpoint_path = os.path.join(checkpoint_dir, 'epoch_{:02}_model.ckpt'.format(epoch))
         saver.save(sess, checkpoint_path)
         logging.info("model saved to {}".format(checkpoint_path))

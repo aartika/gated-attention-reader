@@ -26,8 +26,8 @@ def get_args():
         Text Comprehension Using TensorFlow')
     parser.register('type', 'bool', str2bool)
 
-    parser.add_argument('--resume', type='bool', default=False,
-                        help='whether to keep training from previous model')
+    parser.add_argument('--ckpt_epoch', type=int, default=10,
+                        help='which epoch checkpoint to restore the model from.')
     parser.add_argument('--use_feat', type='bool', default=False,
                         help='whether to use extra features')
     parser.add_argument('--train_emb', type='bool', default=True,
@@ -78,7 +78,7 @@ def get_text(idx_to_word, idx, mask):
     return ' '.join(words)
 
 
-def train(args):
+def test(args):
     use_chars = args.char_dim > 0
     # load data
     dp = data_preprocessor()
@@ -91,101 +91,18 @@ def train(args):
     idx_to_word = dict([(v, k) for (k, v) in data.dictionary[0].items()])
 
     # build minibatch loader
-    train_batch_loader = minibatch_loader(
-        data.training, args.batch_size, sample=1.0)
-    valid_batch_loader = minibatch_loader(
-        data.validation, args.batch_size, shuffle=False)
     test_batch_loader = minibatch_loader(
         data.test, args.batch_size, shuffle=False)
-    if not args.resume:
-        logging.info("loading word2vec file ...")
-        embed_init, embed_dim = \
-            load_word2vec_embeddings(data.dictionary[0], args.embed_file)
-        logging.info("embedding dim: {}".format(embed_dim))
-        logging.info("initialize model ...")
-        model = GAReader(args.n_layers, data.vocab_size, data.n_chars,
-                         args.gru_size, embed_dim, args.train_emb,
-                         args.char_dim, args.use_feat, args.gating_fn, True)
-        model.build_graph(args.grad_clip, embed_init)
-        init = tf.global_variables_initializer()
-        saver = tf.train.Saver(tf.global_variables())
-    else:
-        model = GAReader(args.n_layers, data.vocab_size, data.n_chars,
-                         args.gru_size, 100, args.train_emb,
-                         args.char_dim, args.use_feat, args.gating_fn, True)
 
+    model = GAReader(args.n_layers, data.vocab_size, data.n_chars,
+                     args.gru_size, 100, args.train_emb,
+                     args.char_dim, args.use_feat, args.gating_fn, save_attn=True)
     with tf.Session() as sess:
-        # training phase
-        if not args.resume:
-            sess.run(init)
-            if args.init_test:
-                logging.info('-' * 50)
-                logging.info("Initial test ...")
-                best_loss, best_acc = model.validate(sess, valid_batch_loader)
-            else:
-                best_acc = 0.
-        else:
-            model.restore(sess, args.save_dir)
-            saver = tf.train.Saver(tf.global_variables())
+        model.restore(sess, args.save_dir, args.ckpt_epoch)
         logging.info('-' * 50)
-        lr = args.init_learning_rate
-        logging.info("Start training ...")
-        train_writer = tf.summary.FileWriter('logs/train',
+        logging.info("Start testing...")
+        test_writer = tf.summary.FileWriter('logs/test',
                                       sess.graph)
-        step = 0
-        for epoch in range(args.n_epoch):
-            start = time.time()
-            it = loss = acc = n_example = 0
-            if epoch >= 2:
-                lr /= 2
-            for dw, dt, qw, qt, a, m_dw, m_qw, tt, \
-                    tm, c, m_c, cl, fnames in train_batch_loader:
-                step += 1
-                tf.summary.text('doc', tf.constant(get_text(idx_to_word, dw[0], m_dw[0])))
-
-                if it == 0:
-                    logging.info('running train step wtih summary..')
-                    loss_, acc_, summary = model.train(sess, dw, dt, qw, qt, a, m_dw,
-                                              m_qw, tt, tm, c, m_c, cl, fnames,
-                                              args.drop_out, lr, True)
-                    train_writer.add_summary(summary, step)
-                else:
-                    loss_, acc_ = model.train(sess, dw, dt, qw, qt, a, m_dw,
-                                              m_qw, tt, tm, c, m_c, cl, fnames,
-                                              args.drop_out, lr)
-                loss += loss_
-                acc += acc_
-                it += 1
-                n_example += dw.shape[0]
-                tf.summary.scalar('train_loss', tf.constant(loss_))
-                tf.summary.scalar('train_accuracy', tf.constant(acc_))
-                if it % args.print_every == 0 or \
-                        it % len(train_batch_loader) == 0:
-                    spend = (time.time() - start) / 60
-                    statement = "Epoch: {}, it: {} (max: {}), "\
-                        .format(epoch, it, len(train_batch_loader))
-                    statement += "loss: {:.3f}, acc: {:.3f}, "\
-                        .format(loss / args.print_every,
-                                acc / n_example)
-                    statement += "time: {:.1f}(m)"\
-                        .format(spend)
-                    logging.info(statement)
-                    loss = acc = n_example = 0
-                    start = time.time()
-                # save model
-                if it % args.eval_every == 0 or \
-                        it % len(train_batch_loader) == 0:
-                    valid_loss, valid_acc = model.validate(
-                        sess, valid_batch_loader)
-                    tf.summary.scalar('val_loss', tf.constant(valid_loss))
-                    tf.summary.scalar('val_accuracy', tf.constant(valid_acc))
-                    if valid_acc >= best_acc:
-                        logging.info("Best valid acc: {}".format(best_acc))
-                        model.save(sess, saver, args.save_dir, epoch)
-                    start = time.time()
-            train_writer.close()
-        # test model
-        logging.info("Final test ...")
         model.validate(sess, test_batch_loader, write_results=True)
 
 
@@ -211,4 +128,4 @@ if __name__ == "__main__":
                             format='%(asctime)s %(message)s',
                             datefmt='%m-%d %H:%M')
     logging.info(args)
-    train(args)
+    test(args)

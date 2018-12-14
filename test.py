@@ -84,7 +84,7 @@ def test(args):
     dp = data_preprocessor()
     data = dp.preprocess(
         question_dir=args.data_dir,
-        no_training_set=False,
+        no_training_set=True,
         max_example=args.max_example,
         use_chars=use_chars)
     #import ipdb; ipdb.set_trace()

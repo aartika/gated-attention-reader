@@ -324,7 +324,7 @@ class GAReader:
                     else:
                         correct = 'incorrect'
                     question = os.path.basename(fname).split('.')[0]
-                    pickle.dump(result, open('results/test/{}/{}.pkl'.format(correct, question), 'wb'))
+                    pickle.dump(result, open('results/validation/{}/{}.pkl'.format(correct, question), 'wb'))
         tr.close()
         loss /= n_exmple
         acc /= n_exmple
@@ -335,11 +335,11 @@ class GAReader:
         logging.info(statement)
         return loss, acc
 
-    def restore(self, sess, checkpoint_dir, ckpt_epoch):
+    def restore(self, sess, checkpoint_dir, ckpt):
         """
         restore model
         """
-        checkpoint_path = os.path.join(checkpoint_dir, 'epoch_{:02}_model.ckpt'.format(ckpt_epoch))
+        checkpoint_path = os.path.join(checkpoint_dir, ckpt)
         loader = tf.train.import_meta_graph(checkpoint_path + '.meta')
         loader.restore(sess, checkpoint_path)
         logging.info("model restored from {}".format(checkpoint_path))
@@ -365,7 +365,7 @@ class GAReader:
         self.pred_ans = tf.get_collection('pred_ans')[0]
         self.attentions = tf.get_collection('attentions')[0]
 
-    def save(self, sess, saver, checkpoint_dir, epoch):
-        checkpoint_path = os.path.join(checkpoint_dir, 'epoch_{:02}_model.ckpt'.format(epoch))
+    def save(self, sess, saver, checkpoint_dir, step, valid_acc, valid_loss):
+        checkpoint_path = os.path.join(checkpoint_dir, 'step_{:06}-valid_acc_{:.3f}-valid_loss_{:02.4f}-model.ckpt'.format(step, valid_acc, valid_loss))
         saver.save(sess, checkpoint_path)
         logging.info("model saved to {}".format(checkpoint_path))

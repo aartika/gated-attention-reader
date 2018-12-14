@@ -26,8 +26,8 @@ def get_args():
         Text Comprehension Using TensorFlow')
     parser.register('type', 'bool', str2bool)
 
-    parser.add_argument('--ckpt_epoch', type=int, default=10,
-                        help='which epoch checkpoint to restore the model from.')
+    parser.add_argument('--ckpt', type=str, default='',
+                        help='which checkpoint to use for testing')
     parser.add_argument('--use_feat', type='bool', default=False,
                         help='whether to use extra features')
     parser.add_argument('--train_emb', type='bool', default=True,
@@ -92,18 +92,19 @@ def test(args):
 
     # build minibatch loader
     test_batch_loader = minibatch_loader(
-        data.test, args.batch_size, shuffle=False)
+        data.validation, args.batch_size, shuffle=False)
 
-    model = GAReader(args.n_layers, data.vocab_size, data.n_chars,
-                     args.gru_size, 100, args.train_emb,
-                     args.char_dim, args.use_feat, args.gating_fn, save_attn=True)
-    with tf.Session() as sess:
-        model.restore(sess, args.save_dir, args.ckpt_epoch)
-        logging.info('-' * 50)
-        logging.info("Start testing...")
-        test_writer = tf.summary.FileWriter('logs/test',
-                                      sess.graph)
-        model.validate(sess, test_batch_loader, write_results=True)
+    with tf.device('/device:GPU:0'):
+        model = GAReader(args.n_layers, data.vocab_size, data.n_chars,
+                         args.gru_size, 100, args.train_emb,
+                         args.char_dim, args.use_feat, args.gating_fn, save_attn=True)
+        with tf.Session(config=tf.ConfigProto(log_device_placement=False, allow_soft_placement=True)) as sess:
+            model.restore(sess, args.save_dir, args.ckpt)
+            logging.info('-' * 50)
+            logging.info("Start testing...")
+            test_writer = tf.summary.FileWriter('logs/test',
+                                          sess.graph)
+            model.validate(sess, test_batch_loader, write_results=True)
 
 
 if __name__ == "__main__":

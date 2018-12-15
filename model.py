@@ -16,7 +16,7 @@ from utils.model_helper import *
 from utils.data_preprocessor import MAX_WORD_LEN
 import pickle
 import numpy as np
-
+from tensorflow.python.client import timeline
 
 class GAReader:
     def __init__(self, n_layers, vocab_size, n_chars,
@@ -276,13 +276,25 @@ class GAReader:
 
         tf.summary.scalar('learning_rate', self.lr)
         merged = tf.summary.merge_all()
+        options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+        run_metadata = tf.RunMetadata()
         if summary_step:
             loss, acc, _, summary = \
-                sess.run([self.loss, self.accuracy, self.updates, merged], feed_dict)
+                sess.run([self.loss, self.accuracy, self.updates, merged], feed_dict, options=options, run_metadata=run_metadata)
+            # Create the Timeline object, and write it to a json file
+            fetched_timeline = timeline.Timeline(run_metadata.step_stats)
+            chrome_trace = fetched_timeline.generate_chrome_trace_format()
+            with open('timeline_01.json', 'w') as f:
+                f.write(chrome_trace)
             return loss, acc, summary
         else:
             loss, acc, _, = \
-                sess.run([self.loss, self.accuracy, self.updates], feed_dict)
+                sess.run([self.loss, self.accuracy, self.updates], feed_dict, options=options, run_metadata=run_metadata)
+            # Create the Timeline object, and write it to a json file
+            fetched_timeline = timeline.Timeline(run_metadata.step_stats)
+            chrome_trace = fetched_timeline.generate_chrome_trace_format()
+            with open('timeline_01.json', 'w') as f:
+                f.write(chrome_trace)
             return loss, acc
 
     def validate(self, sess, data, write_results=False):

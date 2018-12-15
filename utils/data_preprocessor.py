@@ -4,6 +4,7 @@
 from __future__ import division
 from __future__ import print_function
 from builtins import range
+import pickle
 
 import glob
 import os
@@ -52,9 +53,15 @@ class data_preprocessor:
         if no_training_set:
             training = None
         else:
-            logging.info("preparing training data ...")
-            training = self.parse_all_files(
-                question_dir + "/training", dictionary, max_example, use_chars)
+            if os.path.exists(question_dir + "/training.pkl"):
+                print("reading serialized training data ...")
+                with open(question_dir + "/training.pkl", "rb") as f:
+                    training = pickle.load(f)
+            else:
+                print("preparing training data ...")
+                training = self.parse_all_files(question_dir + "/training", dictionary, use_chars)
+                pickle.dump(training, open(question_dir + "/training.pkl", "wb"))
+
         logging.info("preparing validation data ...")
         validation = self.parse_all_files(
             question_dir + "/validation", dictionary, None, use_chars)
